@@ -26,7 +26,7 @@ app.post('/fetch-grades', (req, res) => {
     const order_number = '23853388';
 
     // Run the Python script
-    const grade_fetcher = spawn('python3', ['../grade-fetcher/src/v2/main.py', submission_number, order_number]);
+    const grade_fetcher = spawn('../grade-fetcher/env/bin/python3', ['../grade-fetcher/src/v2/main.py', submission_number, order_number]);
 
     // Handle script output
     grade_fetcher.stdout.on('data', (data) => {
