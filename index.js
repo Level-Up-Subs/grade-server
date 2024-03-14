@@ -9,63 +9,87 @@ const port = 3000; // You can change the port as needed
 // Middleware to parse JSON body
 app.use(json());
 
-// file path to store IP address
-const ipAddressFilePath = 'ipAddresses.json'
-
-// object to store IP address and request counts
+// Object to store IP addresses and request counts
 let ipAddresses = {};
 
-// load the ip address if it exists
-if (fs.existsSync(ipAddressFilePath)) {
-  ipAddresses = JSON.parse(fs.readFileSync(ipAddressFilePath, 'utf8'));
-}
+// Load IP addresses and request counts from a file
+const loadIPAddressesFromFile = () => {
+    try {
+        const data = fs.readFileSync('ipAddresses.json');
+        ipAddresses = JSON.parse(data);
+    } catch (error) {
+        console.error('Error loading IP addresses from file:', error);
+    }
+};
+
+// Save IP addresses and request counts to a file
+const saveIPAddressesToFile = () => {
+    try {
+        fs.writeFileSync('ipAddresses.json', JSON.stringify(ipAddresses));
+    } catch (error) {
+        console.error('Error saving IP addresses to file:', error);
+    }
+};
+
+// Load IP addresses from file when the server starts
+loadIPAddressesFromFile();
 
 // Rate limiting middleware
 const limiter = rateLimit({
-    windowMs: 60 * 1000 * 10, // 10 minute
-    max: 1, // Max 1 requests per minute per IP
-    message: 'Too many requests from this IP, please try again later.'
-});
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 10, // Max 10 requests per hour per IP
+    message: 'Too many requests from this IP, please try again later.',
+    onLimitReached: (req, res, options) => {
+        const ipAddress = req.ip;
+        ipAddresses[ipAddress] = ipAddresses[ipAddress] || { count: 0, lastRequestTime: new Date().getTime() };
 
-app.use((req, res, next) => {
-    const ipAddress = req.ip;
-
-    // Increment request count for the IP address
-    ipAddresses[ipAddress] = ipAddresses[ipAddress] ? ipAddresses[ipAddress] + 1 : 1;
-
-    // If request count exceeds a certain threshold, ban the IP address
-    if (ipAddresses[ipAddress] > 10) { // Adjust the threshold as needed
-        res.status(403).send('Your IP address has been banned due to spamming behavior.');
-        return;
+        // If the request limit is exceeded, add the IP address to the blocklist
+        if (ipAddresses[ipAddress].count >= options.max) {
+            console.log(`Blocking IP address ${ipAddress} due to excessive requests.`);
+            ipAddresses[ipAddress].blocked = true;
+        }
     }
-
-    // Save IP addresses to file
-    fs.writeFileSync(ipAddressFilePath, JSON.stringify(ipAddresses, null, 2), 'utf8');
-
-    next();
 });
+
+// Middleware to reset request counts for IP addresses after an hour
+const resetRequestCounts = (req, res, next) => {
+    const currentTime = new Date().getTime();
+    Object.keys(ipAddresses).forEach(ip => {
+        if (currentTime - ipAddresses[ip].lastRequestTime > 60 * 60 * 1000) {
+            delete ipAddresses[ip];
+        }
+    });
+    next();
+};
+
+app.use(resetRequestCounts);
 
 // Route to handle incoming API requests from Shopify website
 app.post('/fetch-grades', limiter, (req, res) => {
-    // Extract necessary information from the request
-    const { dataToPass } = req.body;
+    const ipAddress = req.ip;
 
-    const submission_number = '11953599';
-    const order_number = '23853388';
+    // Check if the IP address is in the blocklist
+    if (ipAddresses[ipAddress] && ipAddresses[ipAddress].blocked) {
+        return res.status(403).send('Your IP address has been blocked due to excessive requests.');
+    }
+
+    // Increment request count for the IP address
+    ipAddresses[ipAddress] = ipAddresses[ipAddress] || { count: 0, lastRequestTime: new Date().getTime() };
+    ipAddresses[ipAddress].count++;
 
     // Run the Python script
-    const grade_fetcher = spawn('../grade-fetcher/src/v2/env/bin/python3', ['../grade-fetcher/src/v2/main.py', submission_number, order_number]);
+    const gradeFetcher = spawn('../grade-fetcher/src/v2/env/bin/python3', ['../grade-fetcher/src/v2/main.py', submissionNumber, orderNumber]);
 
     // Handle script output
-    grade_fetcher.stdout.on('data', (data) => {
+    gradeFetcher.stdout.on('data', (data) => {
         console.log(`Python script stdout: ${data}`);
     });
 
-    grade_fetcher.stderr.on('data', (data) => {
+    gradeFetcher.stderr.on('data', (data) => {
         console.error(`Python script stderr: ${data}`);
     });
 
-    grade_fetcher.on('close', (code) => {
+    gradeFetcher.on('close', (code) => {
         console.log(`Python script process exited with code ${code}`);
 
         // Respond to the request with appropriate status code
@@ -75,9 +99,15 @@ app.post('/fetch-grades', limiter, (req, res) => {
             res.status(500).send('An error occurred during processing.');
         }
     });
+
+    // Save IP addresses to file after each request
+    saveIPAddressesToFile();
 });
 
 // Start the server
 app.listen(port, () => {
     console.log(`Server is listening on port ${port}`);
 });
+
+// Save IP addresses to file periodically (every hour)
+setInterval(saveIPAddressesToFile, 60 * 60 * 1000);
