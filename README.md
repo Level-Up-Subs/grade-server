@@ -26,3 +26,27 @@ https://en.wikipedia.org/wiki/List_of_TCP_and_UDP_port_numbers
 
 ## Proxy?
 Maybe look into using a proxy instead of exposing the server
+
+## Setup
+* sudo nano /etc/systemd/system/my-node-app.service
+```
+[Unit]
+Description=My Node.js Application
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /path/to/your/node/app.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+WorkingDirectory=/path/to/your/node/app
+User=yourusername
+Group=yourgroupname
+
+[Install]
+WantedBy=multi-user.target
+```
+* sudo systemctl daemon-reload
+* sudo systemctl start my-node-app
+* sudo systemctl enable my-node-app
+* sudo systemctl status my-node-app
